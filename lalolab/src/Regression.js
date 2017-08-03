@@ -2286,7 +2286,7 @@ MLPreg.prototype.train = function (Xorig, y) {
 				var rk = 0;
 				for(k=0; k<hls; k++) {
 					var epsdelta = epsilon * delta_w[k];
-					for(j=0; j<d; j++)
+					for(var j=0; j<d; j++)
 						Win.val[rk + j] -= epsdelta * xi[j];
 					rk += d;
 				}

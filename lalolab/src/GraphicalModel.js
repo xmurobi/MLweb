@@ -249,7 +249,7 @@ HMM.prototype.train = function ( stateSequences, obsSequences, labels ) {
 	var Q = new Array(stateSequences.length);
 	
 	// Emissions + parse sequences
-	for(i=0;i < sequences.length ;i++) {
+	for(i=0;i < stateSequences.length ;i++) {
 		
 		x = new Array(obsSequences[i].length);
 		Q[i] = new Array(stateSequences[i].length);
@@ -354,7 +354,7 @@ HMM.prototype.forward = function (x) {
 	const N = this.Nstates;
 	const Noutputs = this.Noutputs;	
 	
-	var i,j,t;
+	var i,j, t,xt;
 	var sum_i_alpha_t_Tij;
 	var c = zeros(x.length);
 	var alpha = zeros(x.length * N);

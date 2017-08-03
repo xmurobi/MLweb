@@ -569,7 +569,7 @@ function mulScalarspVector (a, b) {
 	const nnz = b.val.length;
 	var c = b.copy();
 	for ( var k=0;k < nnz; k++) 
-		c.val[k] *= a;	
+		c.val[k] *= a;
 	return c;
 }
 /**

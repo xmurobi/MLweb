@@ -61,3 +61,4 @@ function text2sparsevector( str, dictionnary, multi ) {
 		var vec = new spVector(dictionnary.length, ones(indexes.length),sort(indexes));
 	return vec;
 }
+
