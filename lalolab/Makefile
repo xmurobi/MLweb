@@ -25,8 +25,8 @@ lalolib.js: src/lalolibbase.js src/linalg.js src/sparse.js src/laloglpk.js src/g
 	cat src/lalolibbase.js src/linalg.js src/sparse.js src/laloglpk.js src/glpk.min.js src/stats.js src/complex.js src/laloplots.js > lalolib.js 
 
 # ML.js includes LALOLib plus Machine learning functions
-ml.js: lalolib.js src/kernels.js src/Classifier.js src/Regression.js src/Clustering.js src/DimReduction.js src/Loaders.js src/MLutils.js
-	cat lalolib.js src/kernels.js src/Classifier.js src/Regression.js src/Clustering.js src/DimReduction.js src/Loaders.js src/MLutils.js > ml.js
+ml.js: lalolib.js src/kernels.js src/Classifier.js src/Regression.js src/Clustering.js src/DimReduction.js src/ReinforceLearning.js src/Loaders.js src/MLutils.js
+	cat lalolib.js src/kernels.js src/Classifier.js src/Regression.js src/Clustering.js src/DimReduction.js src/ReinforceLearning.js src/Loaders.js src/MLutils.js > ml.js
 
 # Nodejs
 node-ml.js: ml.js src/GraphicalModel.js src/NPMutils.js

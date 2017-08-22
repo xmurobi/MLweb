@@ -3,6 +3,7 @@
 module.exports = {
     Classifier : Classifier,
     Regression : Regression,
+    ReinforceLearning: ReinforceLearning,
     DimReduction: DimReduction,
     GraphicalModel: GraphicalModel,
     Distribution: Distribution,
@@ -55,6 +56,8 @@ module.exports = {
         randVector:randVector,
         randMatrix:randMatrix,
         rand:rand,
+        randi:randi,
+        randf:randf,
         randnsparse:randnsparse,
         randsparse:randsparse,
         randperm:randperm,

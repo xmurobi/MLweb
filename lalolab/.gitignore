@@ -4,6 +4,7 @@ lalolib.js
 laloliblab.js
 lalohelp.js
 plotlib.js
+node-ml.js
 !src/plotlib.js
 
 # Excludes examples

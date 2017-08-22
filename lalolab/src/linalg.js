@@ -1029,6 +1029,14 @@ function rand( dim1, dim2 ) {
 	}
 }
 
+function randi(a,b) {
+	return Math.floor(Math.random()*(b-a)+a);
+}
+
+function randf(a,b) {
+	return Math.random()*(b-a)+a;
+}
+
 function randnsparse(NZratio, dim1, dim2) {
 	// Generates a sparse random matrix with NZratio * dim1*dim2 (or NZ if NZratio > 1 ) nonzeros
 	var NZ;
