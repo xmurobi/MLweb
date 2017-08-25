@@ -2,6 +2,17 @@
  * Created by robi on 17/8/21.
  */
 
+function assert(condition, message) {
+    // from http://stackoverflow.com/questions/15313418/javascript-assert
+    if (!condition) {
+        message = message || "Assertion failed";
+        if (typeof Error !== "undefined") {
+            throw new Error(message);
+        }
+        throw message; // Fallback
+    }
+};
+
 // syntactic sugar function for getting default parameter values
 var getopt = function(opt, field_name, default_value) {
     if(typeof opt === 'undefined') { return default_value; }
@@ -24,6 +35,20 @@ var sampleWeighted = function(p) {
 
     // wtf
     return -1;
+};
+
+var maxi = function(w) {
+    // argmax of array w
+    var maxv = w[0];
+    var maxix = 0;
+    for(var i=1,n=w.length;i<n;i++) {
+        var v = w[i];
+        if(v > maxv) {
+            maxix = i;
+            maxv = v;
+        }
+    }
+    return maxix;
 };
 
 //////////////////////////////////////////////////
@@ -61,13 +86,16 @@ function ReinforceLearning (algorithm, params ) {
     this.algorithm = algorithm.name;
     this.userParameters = params;
 
-    // Functions that depend on the algorithm:
     this.construct = algorithm.prototype.construct;
     this.train = algorithm.prototype.train;
     this.act = algorithm.prototype.act;
+    this.actTrain = algorithm.prototype.actTrain;
+    if (  algorithm.prototype.reset )
+        this.reset = algorithm.prototype.reset;
+    if (  algorithm.prototype.resetEpisode )
+        this.resetEpisode = algorithm.prototype.resetEpisode;
 
-    if (  algorithm.prototype.actTrain )
-        this.actTrain = algorithm.prototype.actTrain;
+    // Functions that depend on the algorithm:
     if (  algorithm.prototype.plan )
         this.plan = algorithm.prototype.plan;
     if (  algorithm.prototype.evaluatePolicy )
@@ -80,11 +108,6 @@ function ReinforceLearning (algorithm, params ) {
         this.updatePriority = algorithm.prototype.updatePriority;
     if ( algorithm.prototype.learnFromTuple )
         this.learnFromTuple = algorithm.prototype.learnFromTuple;
-
-    if (  algorithm.prototype.reset )
-        this.reset = algorithm.prototype.reset;
-    if (  algorithm.prototype.resetEpisode )
-        this.resetEpisode = algorithm.prototype.resetEpisode;
 
 
     // Initialization depending on algorithm
@@ -263,7 +286,6 @@ TD.prototype.construct = function (params) {
     this.Q = params.Q || null; // state action value function
     this.P = params.P || null; // policy distribution \pi(s,a)
     this.e = params.e || null; // eligibility trace
-    this.pq = params.pq || null;
     this.env_model_s = params.env_model_s || null; // environment model (s,a) -> (s',r)
     this.env_model_r = params.env_model_r || null; // environment model (s,a) -> (s',r)
     this.env = params.env; // store pointer to environment
@@ -282,6 +304,9 @@ TD.prototype.reset = function (force) {
     this.a0 = null;
     this.a1 = null;
 
+    this.sa_seen = [];
+    this.pq = zeros(this.ns * this.na);
+
     if (this.converged && !force) return;
 
     // reset the agent's policy and value function
@@ -296,8 +321,6 @@ TD.prototype.reset = function (force) {
     this.env_model_s = zeros(this.ns * this.na);
     setConst(this.env_model_s, -1); // init to -1 so we can test if we saw the state before
     this.env_model_r = zeros(this.ns * this.na);
-    this.sa_seen = [];
-    this.pq = zeros(this.ns * this.na);
 
     // initialize uniform random policy
     for(var s=0;s<this.ns;s++) {
@@ -564,3 +587,527 @@ TD.prototype.act = function (s) {
     this.a1 = a;
     return a;
 };
+
+//////////////////////////////////////////////////
+// Deep Q Learning:
+// We're going to extend the Temporal Difference Learning (Q-Learning) to continuous state spaces. In the previos demo we've
+// estimated the Q learning function Q(s,a) as a lookup table. Now, we are going to use a function approximator to model
+// Q(s,a)=fθ(s,a), where θ are some parameters (e.g. weights and biases of a neurons in a network). However, as we will see
+// everything else remains exactly the same. The first paper that showed impressive results with this approach was Playing Atari
+// with Deep Reinforcement Learning at NIPS workshop in 2013, and more recently the Nature paper Human-level control through
+// deep reinforcement learning, both by Mnih et al. However, more impressive than what we'll develop here, their function fθ,a was
+// an entire Convolutional Neural Network that looked at the raw pixels of Atari game console. It's hard to get all that to work in JS :(
+//
+// Recall that in Q-Learning we had training data that is a single chain of
+// st,at,rt,st+1,at+1,rt+1,st+2,… where the states ss and the rewards r are samples from the environment
+// dynamics , and the actions aa are sampled from the agent's policy at∼π(a∣st). The agent's policy in Q-learning is
+// to execute the action that is currently estimated to have the highest value (π(a∣s)=argmaxaQ(s,a),or with a
+// probability ϵ to take a random action to ensure some exploration. The Q-Learning update at each time step then had the following form:
+//
+//      Q(st,at)←Q(st,at)+α[rt+γ * max_aQ(st+1,a)−Q(st,at)]
+//
+// As mentioned, this equation is describing a regular Stochastic Gradient Descent update with learning rate αα and the loss function at time t:
+//
+//      Lt=(rt+γ * max_aQ(st+1,a)−Q(st,at))^2
+//
+// Here y=rt+γmaxaQ(st+1,a) is thought of as a scalar-valued fixed target, while we backpropagate through the neural
+// network that produced the prediction fθ=Q(st,at). Note that the loss has a standard L2 norm regression form, and that we
+// nudge the parameter vector θ in a way that makes the computed Q(s,a) slightly closer to what it should be (i.e. to satisfy the
+// Bellman equation). This softly encourages the constraint that the reward should be properly diffused, in expectation, backwards
+// through the environment dynamics and the agent's policy.
+//
+// In other words, Deep Q Learning is a 1-dimensional regression problem with a vanilla neural network,
+// solved with vanilla stochastic gradient descent, except our training data is not fixed but generated by interacting with the environment.
+//////////////////////////////////////////////////
+
+// Mat holds a matrix which add specific properties for ANN only
+var Mat = function(n,d) {
+    // n is number of rows d is number of columns
+    this.n = n;
+    this.d = d;
+    this.w = zeros(n * d);
+    this.dw = zeros(n * d);
+};
+
+Mat.prototype = {
+    get: function(row, col) {
+        // slow but careful accessor function
+        // we want row-major order
+        var ix = (this.d * row) + col;
+        assert(ix >= 0 && ix < this.w.length);
+        return this.w[ix];
+    },
+    set: function(row, col, v) {
+        // slow but careful accessor function
+        var ix = (this.d * row) + col;
+        assert(ix >= 0 && ix < this.w.length);
+        this.w[ix] = v;
+    },
+    setFrom: function(arr) {
+        for(var i=0,n=arr.length;i<n;i++) {
+            this.w[i] = arr[i];
+        }
+    },
+    setColumn: function(m, i) {
+        for(var q=0,n=m.w.length;q<n;q++) {
+            this.w[(this.d * q) + i] = m.w[q];
+        }
+    },
+    randg: function (mu, std) {
+        for(var i=0,n=this.w.length;i<n;i++) {
+            this.w[i] = randg(mu, std);
+        }
+        return this;
+    },
+    randf: function (lo,hi) {
+        for(var i=0,n=this.w.length;i<n;i++) {
+            this.w[i] = randf(lo, hi);
+        }
+        return this;
+    },
+    fixdw: function (c) {
+        for(var i=0,n=this.dw.length;i<n;i++) {
+            this.dw[i] = c;
+        }
+        return this;
+    },
+    copy: function () {
+        var b = new Mat(this.n,this.d);
+        b.setFrom(this.w);
+        return b;
+    },
+    update: function (alpha) {
+        // updates in place
+        for(var i=0,n=this.n*this.d;i<n;i++) {
+            if(this.dw[i] !== 0) {
+                this.w[i] += - alpha * this.dw[i];
+                this.dw[i] = 0;
+            }
+        }
+        return this;
+    },
+    fromMatrix: function(matrix) {
+        this.n = matrix.m;
+        this.d = matrix.n;
+        this.w = vectorCopy(matrix.val) ;
+        this.dw = zeros(this.n * this.d);
+        return this;
+    },
+    toMatrix: function () {
+        return new Matrix(this.n, this.d, this.w);
+    },
+};
+
+/**
+ * Constract a new
+ * @param ns
+ * @param na
+ * @param hiddens Array that object structure like:
+ * {
+ *  n:'num_of_hidden_neurons',
+ *  fn:'active function in Graph for this layer'
+ * }
+ * @constructor
+ */
+var Net = function (ns, na, hiddens) {
+    assert(hiddens.length >= 1);
+
+    this.W = [];
+    this.b = [];
+
+    this.W[0] = new Mat(hiddens[0].n, ns).randg(0, 0.01);
+    this.b[0] = new Mat(hiddens[0].n, 1).randg(0, 0.01);
+
+    var h = 1;
+    while (h < hiddens.length) {
+        this.W[h-1] = new Mat(hiddens[h].n, hiddens[h-1].n).randg(0, 0.01);
+        this.b[h-1] = new Mat(hiddens[h].n, 1).randg(0, 0.01);
+        ++h;
+    }
+
+    this.W[h] = new Mat(na, hiddens[hiddens.length-1].n).randg(0, 0.01);
+    this.b[h] = new Mat(na, 1).randg(0, 0.01);
+
+    this.hfn = [];
+    h = 0;
+    while (h < hiddens.length) {
+        this.hfn.push(hiddens[h++].fn);
+    }
+};
+
+Net.prototype = {
+    copy: function () {
+        var b = new Net();
+        for(var p in this) {
+            if(this.hasOwnProperty(p)){
+                b[p] = [];
+                for (var i = 0 ;i < this[p].length; ++i) {
+                    if (this[p][i] instanceof Mat)
+                        b[p][i] = this[p][i].copy();
+                    else
+                        b[p][i] = this[p][i];
+                }
+            }
+        }
+        return b;
+    },
+
+    update: function (alpha) {
+        for(var p in this) {
+            if(this.hasOwnProperty(p)){
+                for (var i = 0 ;i < this[p].length; ++i) {
+                    if (this[p][i] instanceof Mat)
+                        this[p][i].update(alpha);
+                }
+            }
+        }
+    },
+
+    forward: function (s, bp_host) {
+        var needs_bp = typeof bp_host === 'object';
+        var G = new Graph(needs_bp);
+
+        var l = 0;
+        var am = null;
+        do {
+            am = G[this.hfn[l]](G.add(G.mul(this.W[l], s), this.b[l]));
+            ++l;
+        } while (l < this.hfn.length);
+
+        var outmat = G.add(G.mul(this.W[l], am), this.b[l]);
+
+        if (needs_bp)
+            bp_host.G = G; // back this up. Kind of hacky isn't it
+
+        return outmat;
+    },
+};
+
+// Transformer definitions
+var Graph = function(needs_backprop) {
+    if(typeof needs_backprop === 'undefined') { needs_backprop = true; }
+    this.needs_backprop = needs_backprop;
+
+    // this will store a list of functions that perform backprop,
+    // in their forward pass order. So in backprop we will go
+    // backwards and evoke each one
+    this.backprop = [];
+};
+
+Graph.prototype = {
+    backward: function() {
+        for(var i=this.backprop.length-1;i>=0;i--) {
+            this.backprop[i](); // tick!
+        }
+    },
+    rowPluck: function(m, ix) {
+        // pluck a row of m with index ix and return it as col vector
+        assert(ix >= 0 && ix < m.n);
+        var d = m.d;
+        var out = new Mat(d, 1);
+        for(var i=0,n=d;i<n;i++){ out.w[i] = m.w[d * ix + i]; } // copy over the data
+
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0,n=d;i<n;i++){ m.dw[d * ix + i] += out.dw[i]; }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    tanh: function(m) {
+        // tanh nonlinearity
+        var out = new Mat(m.n, m.d);
+        var n = m.w.length;
+        for(var i=0;i<n;i++) {
+            out.w[i] = Math.tanh(m.w[i]);
+        }
+
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0;i<n;i++) {
+                    // grad for z = tanh(x) is (1 - z^2)
+                    var mwi = out.w[i];
+                    m.dw[i] += (1.0 - mwi * mwi) * out.dw[i];
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    sigmoid: function(m) {
+        // sigmoid nonlinearity
+        var out = new Mat(m.n, m.d);
+        var n = m.w.length;
+        for(var i=0;i<n;i++) {
+            out.w[i] = 1.0/(1+Math.exp(-m.w[i]));
+        }
+
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0;i<n;i++) {
+                    // grad for z = tanh(x) is (1 - z^2)
+                    var mwi = out.w[i];
+                    m.dw[i] += mwi * (1.0 - mwi) * out.dw[i];
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    relu: function(m) {
+        var out = new Mat(m.n, m.d);
+        var n = m.w.length;
+        for(var i=0;i<n;i++) {
+            out.w[i] = Math.max(0, m.w[i]); // relu
+        }
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0;i<n;i++) {
+                    m.dw[i] += m.w[i] > 0 ? out.dw[i] : 0.0;
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    mul: function(m1, m2) {
+        // multiply matrices m1 * m2
+        assert(m1.d === m2.n, 'matmul dimensions misaligned');
+
+        var n = m1.n;
+        var d = m2.d;
+        var out = new Mat(n,d);
+        for(var i=0;i<m1.n;i++) { // loop over rows of m1
+            for(var j=0;j<m2.d;j++) { // loop over cols of m2
+                var dot = 0.0;
+                for(var k=0;k<m1.d;k++) { // dot product loop
+                    dot += m1.w[m1.d*i+k] * m2.w[m2.d*k+j];
+                }
+                out.w[d*i+j] = dot;
+            }
+        }
+
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0;i<m1.n;i++) { // loop over rows of m1
+                    for(var j=0;j<m2.d;j++) { // loop over cols of m2
+                        for(var k=0;k<m1.d;k++) { // dot product loop
+                            var b = out.dw[d*i+j];
+                            m1.dw[m1.d*i+k] += m2.w[m2.d*k+j] * b;
+                            m2.dw[m2.d*k+j] += m1.w[m1.d*i+k] * b;
+                        }
+                    }
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    add: function(m1, m2) {
+        assert(m1.w.length === m2.w.length);
+
+        var out = new Mat(m1.n, m1.d);
+        for(var i=0,n=m1.w.length;i<n;i++) {
+            out.w[i] = m1.w[i] + m2.w[i];
+        }
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0,n=m1.w.length;i<n;i++) {
+                    m1.dw[i] += out.dw[i];
+                    m2.dw[i] += out.dw[i];
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    dot: function(m1, m2) {
+        // m1 m2 are both column vectors
+        assert(m1.w.length === m2.w.length);
+        var out = new Mat(1,1);
+        var dot = 0.0;
+        for(var i=0,n=m1.w.length;i<n;i++) {
+            dot += m1.w[i] * m2.w[i];
+        }
+        out.w[0] = dot;
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0,n=m1.w.length;i<n;i++) {
+                    m1.dw[i] += m2.w[i] * out.dw[0];
+                    m2.dw[i] += m1.w[i] * out.dw[0];
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+    eltmul: function(m1, m2) {
+        assert(m1.w.length === m2.w.length);
+
+        var out = new Mat(m1.n, m1.d);
+        for(var i=0,n=m1.w.length;i<n;i++) {
+            out.w[i] = m1.w[i] * m2.w[i];
+        }
+        if(this.needs_backprop) {
+            var backward = function() {
+                for(var i=0,n=m1.w.length;i<n;i++) {
+                    m1.dw[i] += m2.w[i] * out.dw[i];
+                    m2.dw[i] += m1.w[i] * out.dw[i];
+                }
+            }
+            this.backprop.push(backward);
+        }
+        return out;
+    },
+};
+
+function DQN (params) {
+    var that = new ReinforceLearning ( DQN, params);
+    return that;
+};
+
+DQN.prototype.construct = function (params) {
+    this.env = params.env;
+
+    this.gamma = getopt(params, 'gamma', 0.75); // future reward discount factor
+    this.epsilon = getopt(params, 'epsilon', 0.1); // for epsilon-greedy policy
+    this.alpha = getopt(params, 'alpha', 0.01); // value function learning rate
+
+    this.experience_add_every = getopt(params, 'experience_add_every', 25); // number of time steps before we add another experience to replay memory
+    this.experience_size = getopt(params, 'experience_size', 5000); // size of experience replay
+    this.learning_steps_per_iteration = getopt(params, 'learning_steps_per_iteration', 10);
+    this.tderror_clamp = getopt(params, 'tderror_clamp', 1.0);
+
+    this.converged = getopt(params, 'converged', false);
+
+    this.num_hidden_units =  getopt(params, 'num_hidden_units', 100);
+    this.nh = this.num_hidden_units;
+    this.ns = getopt(params, 'ns', this.env.getNumStates());
+    this.na = getopt(params, 'na', this.env.getMaxNumActions());
+    this.nh = getopt(params, 'hiddens', [{n:this.num_hidden_units, fn:'tanh'}]);
+
+    this.net = new Net(this.ns, this.na, this.nh);
+
+    this.reset();
+
+};
+
+DQN.prototype.reset = function (force) {
+
+    this.exp = []; // experience
+    this.expi = 0; // where to insert
+
+    this.t = 0;
+
+    this.r0 = null;
+    this.s0 = null;
+    this.s1 = null;
+    this.a0 = null;
+    this.a1 = null;
+
+    this.tderror = 0; // for visualization only...
+
+    if (this.converged && !force) return;
+
+    this.nh = [{n:this.num_hidden_units, fn:'tanh'}];
+    this.ns = this.env.getNumStates();
+    this.na = this.env.getMaxNumActions();
+
+    this.net = new Net(this.ns, this.na, this.nh);
+
+};
+
+DQN.prototype.actTrain = function(slist) {
+    // convert to a Mat column vector
+    var s = new Mat(this.ns, 1);
+    s.setFrom(slist);
+
+    // epsilon greedy policy
+    if(Math.random() < this.epsilon) {
+        var a = randi(0, this.na);
+    } else {
+        // greedy wrt Q function
+        var amat = this.net.forward(s);
+        var a = maxi(amat.w); // returns index of argmax action
+    }
+
+    // shift state memory
+    this.s0 = this.s1;
+    this.a0 = this.a1;
+    this.s1 = s;
+    this.a1 = a;
+
+    return a;
+};
+
+DQN.prototype.act = function(slist) {
+    // convert to a Mat column vector
+    var s = new Mat(this.ns, 1);
+    s.setFrom(slist);
+
+    // greedy wrt Q function
+    var amat = this.net.forward(s);
+    var a = maxi(amat.w); // returns index of argmax action
+
+    // shift state memory
+    this.s0 = this.s1;
+    this.a0 = this.a1;
+    this.s1 = s;
+    this.a1 = a;
+
+    return a;
+};
+
+DQN.prototype.train = function(r1) {
+    // perform an update on Q function
+    if(!(this.r0 == null) && this.alpha > 0) {
+
+        // learn from this tuple to get a sense of how "surprising" it is to the agent
+        var tderror = this.learnFromTuple(this.s0, this.a0, this.r0, this.s1, this.a1);
+        this.tderror = tderror; // a measure of surprise
+
+        // decide if we should keep this experience in the replay
+        if(this.t % this.experience_add_every === 0) {
+            this.exp[this.expi] = [this.s0, this.a0, this.r0, this.s1, this.a1];
+            this.expi += 1;
+            if(this.expi > this.experience_size) { this.expi = 0; } // roll over when we run out
+        }
+        this.t += 1;
+
+        // sample some additional experience from replay memory and learn from it
+        for(var k=0;k<this.learning_steps_per_iteration;k++) {
+            var ri = randi(0, this.exp.length); // todo: priority sweeps?
+            var e = this.exp[ri];
+            this.learnFromTuple(e[0], e[1], e[2], e[3], e[4])
+        }
+    }
+    this.r0 = r1; // store for next update
+};
+
+DQN.prototype.learnFromTuple = function(s0, a0, r0, s1, a1) {
+    // want: Q(s,a) = r + gamma * max_a' Q(s',a')
+
+    // compute the target Q value
+    var tmat = this.net.forward(s1);
+    var qmax = r0 + this.gamma * tmat.w[maxi(tmat.w)];
+
+    // now predict
+    var pred = this.net.forward(s0, this);
+
+    var tderror = pred.w[a0] - qmax;
+    var clamp = this.tderror_clamp;
+    if(Math.abs(tderror) > clamp) {  // huber loss to robustify
+        if(tderror > clamp) tderror = clamp;
+        if(tderror < -clamp) tderror = -clamp;
+    }
+    pred.dw[a0] = tderror;
+    this.G.backward(); // compute gradients on net params
+
+    // update net
+    this.net.update(this.alpha);
+    return tderror;
+};
+
+
+
